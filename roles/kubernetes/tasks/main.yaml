@@ -1,0 +1,192 @@
+# =============================================================================
+# KUBERNETES ROLE - Installs k8s packages and initializes the cluster
+# =============================================================================
+#
+# This is the main role. It does two things:
+#
+# PART 1 — INSTALL PACKAGES (always runs, idempotent):
+#   - Adds the Kubernetes apt repository and signing key
+#   - Installs kubeadm, kubelet, and kubectl
+#   - "Holds" the packages so apt doesn't accidentally upgrade them
+#     (k8s upgrades need to be done carefully with kubeadm upgrade)
+#
+# PART 2 — CLUSTER INIT (conditional):
+#   - Checks if a healthy cluster already exists
+#   - If NOT healthy: tears down the broken cluster and creates a new one
+#   - If healthy: skips everything (idempotent)
+#   - Sets up kubectl config for your user
+#   - Removes the "taint" that prevents pods from running on the control plane
+#     (normally k8s doesn't schedule workloads on the master, but since this
+#     is a single-node setup, we need to allow it)
+#
+# KEY ANSIBLE CONCEPTS USED:
+#   - "register": saves the output of a command to a variable
+#   - "when": only runs the task if the condition is true
+#   - "failed_when: false": don't treat a non-zero exit code as a failure
+#   - "changed_when: false": don't report this task as "changed"
+#   - "loop": repeat the task for each item in the list
+# =============================================================================
+
+---
+# ===== PART 1: INSTALL KUBERNETES PACKAGES =====
+
+# Create the directory where apt signing keys are stored.
+# Signing keys verify that packages actually come from the official source.
+- name: Ensure keyrings directory exists
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+# Download the GPG signing key for the Kubernetes package repository.
+# This lets apt verify that k8s packages haven't been tampered with.
+- name: Add Kubernetes apt signing key
+  apt_key:
+    url: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key"
+    keyring: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    state: present
+
+# Add the Kubernetes package repository to apt's sources list.
+# This is like telling apt: "you can also download packages from this URL."
+# The {{ k8s_version }} means it points to the 1.33 release channel.
+- name: Add Kubernetes apt repository
+  apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/ /"
+    filename: kubernetes
+    state: present
+
+# Install the three core Kubernetes tools:
+#   - kubeadm: bootstraps and manages the cluster (init, join, upgrade, reset)
+#   - kubelet: the agent that runs on every node, starts/stops pods
+#   - kubectl: the CLI you use to interact with the cluster (get pods, apply, etc.)
+- name: Install Kubernetes packages
+  apt:
+    name:
+      - kubeadm
+      - kubelet
+      - kubectl
+    state: present
+    update_cache: true
+
+# "Hold" packages = prevent apt from upgrading them automatically.
+# K8s version upgrades must be done through kubeadm's upgrade process,
+# not through random apt upgrades, or you'll break the cluster.
+- name: Hold Kubernetes packages
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubeadm
+    - kubelet
+    - kubectl
+
+# Make sure kubelet starts on boot. The actual kubelet process will keep
+# crash-looping until kubeadm init runs — that's normal and expected.
+- name: Enable kubelet service
+  systemd:
+    name: kubelet
+    enabled: true
+
+# ===== PART 2: CLUSTER HEALTH CHECK AND CONDITIONAL RESET/INIT =====
+
+# Try to talk to the cluster. If this succeeds (exit code 0), the cluster
+# is healthy and we skip all the reset/init steps below.
+# "register: cluster_health" saves the result so we can check it later.
+# "failed_when: false" means: don't stop the playbook if this command fails
+# (we EXPECT it to fail when the cluster is broken — that's the whole point).
+- name: Check if cluster is healthy
+  command: kubectl get nodes --kubeconfig /etc/kubernetes/admin.conf
+  register: cluster_health
+  changed_when: false
+  failed_when: false
+
+# If the cluster is NOT healthy, tear it down completely.
+# "kubeadm reset -f" removes all k8s components, certs, and configs.
+# The "-f" flag means force (don't ask for confirmation).
+# "when: cluster_health.rc != 0" = only run if the health check failed
+# (rc = return code, 0 = success, anything else = failure).
+- name: Reset broken or missing cluster
+  command: kubeadm reset -f
+  when: cluster_health.rc != 0
+
+# Delete and recreate the CNI (Container Network Interface) config directory.
+# Old Calico/networking configs from the broken cluster could interfere.
+# The loop trick [absent, directory] first deletes the dir, then recreates it empty.
+- name: Clean up stale CNI config
+  file:
+    path: /etc/cni/net.d
+    state: "{{ item }}"
+  loop:
+    - absent
+    - directory
+  when: cluster_health.rc != 0
+
+# Same cleanup for etcd data. etcd is Kubernetes' database — it stores all
+# cluster state (what pods exist, what deployments, etc.). The old data
+# references the wrong IP, so it needs to go.
+- name: Clean up stale etcd data
+  file:
+    path: /var/lib/etcd
+    state: "{{ item }}"
+  loop:
+    - absent
+    - directory
+  when: cluster_health.rc != 0
+
+# Remove old kubeconfig (the file that lets kubectl talk to the cluster).
+# It contains the old server address, so it's useless.
+- name: Remove old kubeconfig
+  file:
+    path: "/home/{{ ansible_user }}/.kube"
+    state: absent
+  when: cluster_health.rc != 0
+
+# Create a brand new cluster! This is the big one.
+# "kubeadm init" sets up etcd, generates all certificates, starts the API server,
+# controller manager, and scheduler.
+#   --pod-network-cidr: tells k8s what IP range to use for pod IPs
+#   --apiserver-advertise-address: the IP the API server listens on (our static IP)
+- name: Initialize Kubernetes cluster
+  command: >
+    kubeadm init
+    --pod-network-cidr={{ pod_cidr }}
+    --apiserver-advertise-address={{ static_ip }}
+  when: cluster_health.rc != 0
+
+# ===== PART 3: KUBECONFIG SETUP =====
+# These tasks run every time (not conditional) to ensure the config is always correct.
+
+# Create the ~/.kube directory where kubectl looks for its config file.
+- name: Create .kube directory for user
+  file:
+    path: "/home/{{ ansible_user }}/.kube"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0755"
+
+# Copy the admin kubeconfig from k8s' location to your user's home directory.
+# "remote_src: true" means the source file is on the server (not in the Ansible role).
+# Without this, kubectl would require sudo for every command.
+- name: Copy admin kubeconfig for user
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "/home/{{ ansible_user }}/.kube/config"
+    remote_src: true
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+
+# ===== PART 4: SINGLE-NODE SETUP =====
+
+# By default, Kubernetes "taints" control-plane nodes to prevent regular
+# workloads from running on them (in production, you want dedicated worker nodes).
+# Since this is a single-node cluster, we remove that taint so your apps
+# can actually run. The trailing "-" in the taint name means "remove this taint."
+# "failed_when" handles the case where the taint was already removed.
+- name: Remove control-plane taint
+  command: >
+    kubectl taint nodes --all node-role.kubernetes.io/control-plane- --kubeconfig /etc/kubernetes/admin.conf
+  register: taint_result
+  changed_when: "'untainted' in taint_result.stdout"
+  failed_when: "taint_result.rc != 0 and 'not found' not in taint_result.stderr"

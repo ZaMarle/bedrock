@@ -1,0 +1,27 @@
+# =============================================================================
+# CONTAINERD CONFIG - Minimal configuration for Kubernetes
+# =============================================================================
+#
+# This is a stripped-down config. containerd has hundreds of default settings
+# that we don't need to specify — we only override what matters for k8s:
+#
+#   - version = 2: Use config format version 2 (current standard)
+#   - sandbox_image: The "pause" container image that k8s uses as a placeholder
+#     in every pod (it does nothing, just holds the network namespace open)
+#   - runtime_type: Use runc v2 (the standard OCI container runtime)
+#   - SystemdCgroup = true: THIS IS THE CRITICAL SETTING. It tells containerd
+#     to use systemd for managing cgroups (resource limits). Kubernetes also
+#     uses systemd for cgroups, so they MUST match. If this is false, kubelet
+#     and containerd fight over cgroup management and things break randomly.
+# =============================================================================
+
+version = 2
+
+[plugins."io.containerd.grpc.v1.cri"]
+  sandbox_image = "registry.k8s.io/pause:3.10"
+
+  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+    runtime_type = "io.containerd.runc.v2"
+
+    [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+      SystemdCgroup = true

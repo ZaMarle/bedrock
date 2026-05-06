@@ -1,0 +1,93 @@
+# =============================================================================
+# PREREQUISITES ROLE - Prepares the OS for Kubernetes
+# =============================================================================
+#
+# Kubernetes has specific requirements for the Linux kernel and OS settings.
+# This role configures all of them:
+#
+#   1. Disable swap — Kubernetes refuses to run if swap is enabled because
+#      it messes with memory management for containers
+#   2. Load kernel modules — Kubernetes networking needs "overlay" (for
+#      container filesystems) and "br_netfilter" (for bridge networking)
+#   3. Set sysctl params — Linux kernel network settings that Kubernetes
+#      needs for pod-to-pod communication
+#   4. Install apt packages — basic tools needed for downloading k8s packages
+#
+# All tasks are idempotent — safe to run multiple times, they only change
+# things if needed.
+# =============================================================================
+
+---
+# Turn off swap immediately. Kubernetes will fail to start if swap is on.
+# "changed_when: false" tells Ansible this command doesn't "change" anything
+# worth reporting (it's always safe to run).
+- name: Disable swap
+  command: swapoff -a
+  changed_when: false
+
+# Remove any swap entries from /etc/fstab so swap stays off after reboot.
+# "lineinfile" edits a single line in a file — here it finds any line
+# containing "swap" and removes it.
+- name: Remove swap entries from fstab
+  lineinfile:
+    path: /etc/fstab
+    regexp: '\sswap\s'
+    state: absent
+
+# Load kernel modules into the running kernel.
+# "modprobe" is the Linux command to load modules.
+# "loop" means: do this task once for each item in the list.
+#   - overlay: needed for container filesystem layers (how Docker/containerd work)
+#   - br_netfilter: lets Linux firewall rules (iptables) see bridged traffic between pods
+- name: Load required kernel modules
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - overlay
+    - br_netfilter
+
+# Make the kernel modules load automatically on boot.
+# The above modprobe only loads them for the current session — this file
+# tells Linux to load them every time the system starts.
+- name: Persist kernel modules across reboots
+  copy:
+    dest: /etc/modules-load.d/kubernetes.conf
+    content: |
+      overlay
+      br_netfilter
+    owner: root
+    group: root
+    mode: "0644"
+
+# Configure Linux kernel networking parameters that Kubernetes requires.
+# "sysctl" sets runtime kernel parameters.
+#   - bridge-nf-call-iptables/ip6tables: makes iptables process bridged traffic
+#     (without this, pod networking doesn't work)
+#   - ip_forward: allows the server to forward packets between network interfaces
+#     (required for routing traffic between pods and the outside world)
+# These are written to a file in /etc/sysctl.d/ so they persist across reboots.
+- name: Set required sysctl params
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-kubernetes.conf
+    reload: true
+    state: present
+  loop:
+    - { key: "net.bridge.bridge-nf-call-iptables", value: "1" }
+    - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+    - { key: "net.ipv4.ip_forward", value: "1" }
+
+# Install basic packages needed to download and verify Kubernetes packages.
+# "state: present" means install if missing, skip if already installed.
+# "update_cache: true" runs "apt update" first to refresh package lists.
+- name: Install apt dependencies
+  apt:
+    name:
+      - apt-transport-https    # allows apt to download over HTTPS
+      - ca-certificates        # SSL certificate bundle for verifying HTTPS
+      - curl                   # command-line tool for downloading files
+      - gpg                    # verifies package signatures (security)
+    state: present
+    update_cache: true

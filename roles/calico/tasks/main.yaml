@@ -1,0 +1,93 @@
+# =============================================================================
+# CALICO ROLE - Installs the pod networking plugin
+# =============================================================================
+#
+# Kubernetes doesn't come with built-in pod networking — you need to install
+# a "CNI plugin" (Container Network Interface) that handles:
+#   - Assigning IP addresses to pods
+#   - Routing traffic between pods (even across nodes)
+#   - Network policies (firewall rules between pods)
+#
+# Calico is one of the most popular CNI plugins. It uses the "operator" pattern:
+#   1. First, install the Tigera Operator (a program that manages Calico for you)
+#   2. Then, give the operator a configuration (custom resources) telling it
+#      what IP range to use, what encapsulation mode, etc.
+#   3. The operator creates all the Calico pods automatically
+#
+# Without a CNI plugin, pods will be stuck in "Pending" state and the node
+# will show as "NotReady" in kubectl get nodes.
+# =============================================================================
+
+---
+# Install the Tigera operator. This downloads a YAML manifest from GitHub
+# and applies it to the cluster. The manifest creates a namespace, service
+# account, RBAC rules, and a Deployment for the operator itself.
+# "kubectl create" will fail with "AlreadyExists" if run again — that's fine,
+# we handle that with "failed_when" to make it idempotent.
+- name: Install Calico Tigera operator
+  command: >
+    kubectl create -f
+    https://raw.githubusercontent.com/projectcalico/calico/v{{ calico_version }}.0/manifests/tigera-operator.yaml
+    --kubeconfig /etc/kubernetes/admin.conf
+  register: calico_operator
+  changed_when: calico_operator.rc == 0
+  failed_when: "calico_operator.rc != 0 and 'AlreadyExists' not in calico_operator.stderr"
+
+# Write the Calico configuration to a temporary file.
+# This tells the Calico operator HOW to set up networking:
+#   - Installation resource:
+#       - cidr: the pod IP range (must match --pod-network-cidr from kubeadm init)
+#       - blockSize: 26 means each node gets a /26 block (64 IPs) from the pod CIDR
+#       - encapsulation: VXLANCrossSubnet wraps pod traffic in VXLAN packets only
+#         when crossing subnets (good default for most setups)
+#       - natOutgoing: lets pods access the internet through the node's IP
+#   - APIServer resource: enables the Calico API server (for network policies etc.)
+- name: Write Calico custom resources manifest
+  copy:
+    dest: /tmp/calico-custom-resources.yaml
+    content: |
+      apiVersion: operator.tigera.io/v1
+      kind: Installation
+      metadata:
+        name: default
+      spec:
+        calicoNetwork:
+          ipPools:
+            - name: default-ipv4-ippool
+              blockSize: 26
+              cidr: {{ pod_cidr }}
+              encapsulation: VXLANCrossSubnet
+              natOutgoing: Enabled
+              nodeSelector: all()
+      ---
+      apiVersion: operator.tigera.io/v1
+      kind: APIServer
+      metadata:
+        name: default
+      spec: {}
+    owner: root
+    group: root
+    mode: "0644"
+
+# Apply the config. "kubectl apply" is idempotent — if the resources already
+# exist with the same settings, it does nothing.
+- name: Apply Calico custom resources
+  command: >
+    kubectl apply -f /tmp/calico-custom-resources.yaml
+    --kubeconfig /etc/kubernetes/admin.conf
+
+# Wait for all Calico pods to be running and ready.
+# Calico creates several pods (node agent, typha, operator, API server).
+# "retries: 3" with "delay: 10" means: if the wait fails, try again after
+# 10 seconds, up to 3 times. The pods can take a minute to pull images and start.
+# "--timeout=300s" means each individual wait attempt allows up to 5 minutes.
+- name: Wait for Calico pods to be ready
+  command: >
+    kubectl wait --for=condition=Ready pods --all
+    -n calico-system --timeout=300s
+    --kubeconfig /etc/kubernetes/admin.conf
+  changed_when: false
+  retries: 3
+  delay: 10
+  register: calico_wait
+  until: calico_wait.rc == 0

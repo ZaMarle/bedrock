@@ -1,0 +1,18 @@
+# =============================================================================
+# CONTAINERD HANDLERS - Actions triggered by "notify" in tasks
+# =============================================================================
+#
+# Handlers are like tasks, but they only run when triggered by "notify" from
+# another task. They run ONCE at the end of the role, even if notified multiple
+# times. This avoids restarting a service 5 times if 5 tasks changed its config.
+#
+# This handler restarts containerd when its config file changes, so it picks
+# up the new settings.
+# =============================================================================
+
+---
+- name: restart containerd
+  systemd:
+    name: containerd
+    state: restarted
+    daemon_reload: true

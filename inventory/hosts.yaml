@@ -1,0 +1,27 @@
+# =============================================================================
+# INVENTORY FILE - Tells Ansible which servers to manage
+# =============================================================================
+#
+# This file lists the servers Ansible will configure over SSH.
+# Ansible runs from your WSL environment on your Windows PC and connects
+# to the server remotely.
+#
+# The structure is:
+#   all:              <-- a group called "all" (every host belongs to this)
+#     hosts:          <-- list of machines in this group
+#       zama:         <-- a friendly name for the server (you pick this)
+#         ansible_host: 192.168.1.100   <-- the actual IP to SSH into
+#         ansible_user: zac             <-- the SSH username
+#
+# SETUP (one-time, from WSL):
+#   1. Install Ansible:          sudo apt update && sudo apt install -y ansible
+#   2. Generate an SSH key:      ssh-keygen -t ed25519  (just press enter through prompts)
+#   3. Copy it to the server:    ssh-copy-id zac@192.168.1.100
+#   4. Test it works:            ssh zac@192.168.1.100  (should connect without a password)
+# =============================================================================
+
+all:
+  hosts:
+    zama:
+      ansible_host: 192.168.1.100
+      ansible_user: zac

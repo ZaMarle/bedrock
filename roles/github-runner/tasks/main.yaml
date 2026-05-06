@@ -1,0 +1,148 @@
+# =============================================================================
+# GITHUB RUNNER ROLE - Deploys a self-hosted GitHub Actions runner to the cluster
+# =============================================================================
+#
+# This role creates everything needed to run a GitHub Actions runner as a pod:
+#
+#   1. A namespace to keep runner resources isolated
+#   2. A ServiceAccount + ClusterRoleBinding so the runner pod can use
+#      kubectl and helm against the cluster (cluster-admin access)
+#   3. An image pull secret so Kubernetes can pull the private runner image
+#      from ghcr.io
+#   4. A Deployment that runs the runner container, configured to register
+#      with your GitHub organization
+#
+# REQUIRED EXTRA VARS (passed at runtime):
+#   --extra-vars "github_runner_token=<token> ghcr_pat=<pat>"
+#
+#   - github_runner_token: A GitHub runner registration token. Generate one at:
+#     https://github.com/organizations/zamarle/settings/actions/runners/new
+#     (these tokens expire after 1 hour, so generate right before running)
+#
+#   - ghcr_pat: A GitHub Personal Access Token with "read:packages" scope,
+#     used to pull the runner image from ghcr.io/zamarle/github-runner
+# =============================================================================
+
+---
+# ===== NAMESPACE =====
+# Create a dedicated namespace to keep runner resources separate from your apps.
+# "state: present" means create it if it doesn't exist, skip if it does.
+
+- name: Create github-runner namespace
+  command: kubectl create namespace github-runner --kubeconfig /etc/kubernetes/admin.conf
+  register: ns_result
+  changed_when: ns_result.rc == 0
+  failed_when: "ns_result.rc != 0 and 'AlreadyExists' not in ns_result.stderr"
+
+# ===== RBAC (Role-Based Access Control) =====
+# The runner needs permission to deploy things to the cluster via kubectl/helm.
+# We create a ServiceAccount and bind it to the cluster-admin role.
+# This gives the runner full access — appropriate for a home lab, but in
+# production you'd want a more restrictive role.
+
+- name: Apply ServiceAccount and RBAC
+  command: kubectl apply -f - --kubeconfig /etc/kubernetes/admin.conf
+  args:
+    stdin: |
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: github-runner
+        namespace: github-runner
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: github-runner-admin
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: cluster-admin
+      subjects:
+        - kind: ServiceAccount
+          name: github-runner
+          namespace: github-runner
+
+# ===== IMAGE PULL SECRET =====
+# The runner image is in a private GitHub Container Registry (ghcr.io).
+# Kubernetes needs credentials to pull it. We create a "docker-registry"
+# secret with your GitHub PAT (Personal Access Token).
+# The --dry-run + pipe trick makes this idempotent (creates or updates).
+
+- name: Create ghcr.io image pull secret
+  shell: |
+    kubectl create secret docker-registry ghcr-login-secret \
+      --namespace github-runner \
+      --docker-server=ghcr.io \
+      --docker-username=zamarle \
+      --docker-password={{ ghcr_pat }} \
+      --kubeconfig /etc/kubernetes/admin.conf \
+      --dry-run=client -o yaml | kubectl apply -f - --kubeconfig /etc/kubernetes/admin.conf
+
+# ===== DEPLOYMENT =====
+# This creates the actual runner pod. Key things:
+#   - serviceAccountName: uses the ServiceAccount we created above, which
+#     auto-mounts a token into the pod for kubectl/helm to use
+#   - imagePullSecrets: tells k8s to use our ghcr.io credentials
+#   - GITHUB_URL: the org URL the runner registers to
+#   - GITHUB_TOKEN: the registration token (one-time use, expires in 1 hour)
+#   - RUNNER_NAME/RUNNER_GROUP: labels for identifying the runner in GitHub UI
+#   - RUNNER_WORKDIR: where workflow files are checked out inside the container
+
+- name: Apply runner Deployment
+  command: kubectl apply -f - --kubeconfig /etc/kubernetes/admin.conf
+  args:
+    stdin: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: github-runner
+        namespace: github-runner
+        labels:
+          app: github-runner
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: github-runner
+        template:
+          metadata:
+            labels:
+              app: github-runner
+          spec:
+            serviceAccountName: github-runner
+            imagePullSecrets:
+              - name: ghcr-login-secret
+            containers:
+              - name: runner
+                image: ghcr.io/zamarle/github-runner:latest
+                env:
+                  - name: GITHUB_URL
+                    value: "https://github.com/zamarle"
+                  - name: GITHUB_TOKEN
+                    value: "{{ github_runner_token }}"
+                  - name: RUNNER_NAME
+                    value: "bedrock-runner"
+                  - name: RUNNER_GROUP
+                    value: "default"
+                  - name: RUNNER_WORKDIR
+                    value: "/home/runner/_work"
+                resources:
+                  requests:
+                    cpu: "500m"
+                    memory: "512Mi"
+                  limits:
+                    cpu: "2"
+                    memory: "2Gi"
+
+# Wait for the runner pod to start successfully.
+- name: Wait for runner pod to be ready
+  command: >
+    kubectl wait --for=condition=Ready pods -l app=github-runner
+    -n github-runner --timeout=120s
+    --kubeconfig /etc/kubernetes/admin.conf
+  changed_when: false
+  retries: 3
+  delay: 10
+  register: runner_wait
+  until: runner_wait.rc == 0

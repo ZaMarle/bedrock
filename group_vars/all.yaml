@@ -1,0 +1,43 @@
+# =============================================================================
+# GROUP VARIABLES - Shared settings used across all roles
+# =============================================================================
+#
+# This file defines variables that every role can access using {{ variable_name }}
+# syntax. For example, when a role file says {{ static_ip }}, Ansible replaces
+# it with "192.168.1.100" at runtime.
+#
+# "group_vars/all.yaml" means: these variables apply to the "all" group,
+# which includes every host in the inventory. If you had multiple servers
+# in different groups, you could have group_vars/webservers.yaml etc.
+#
+# To change any setting (like the IP or k8s version), edit it here and
+# re-run the playbook — all roles will pick up the new value automatically.
+# =============================================================================
+
+# --- Network settings (used by the network role to set a static IP) ---
+static_ip: "192.168.1.100"       # The fixed IP address for this server
+cidr: 24                          # Subnet mask (24 = 255.255.255.0, meaning 192.168.1.0-255)
+gateway: "192.168.1.1"            # Your router's IP address
+dns_servers:                      # DNS servers for name resolution
+  - "1.1.1.1"                    #   Cloudflare DNS
+  - "8.8.8.8"                    #   Google DNS (backup)
+interface: "enp0s31f6"            # The physical network adapter name (from "ip a" output)
+
+# --- Kubernetes settings ---
+k8s_version: "1.33"               # Kubernetes minor version (packages come from this version's repo)
+pod_cidr: "10.244.0.0/16"         # Internal IP range for pods (containers get IPs from this range)
+service_cidr: "10.96.0.0/12"      # Internal IP range for Kubernetes services
+
+# --- Calico CNI (Container Network Interface) ---
+calico_version: "3.29"            # Calico version — the networking plugin that connects pods together
+
+# --- GitHub Actions Runner ---
+# These are NOT stored here — they're passed at runtime via --extra-vars
+# to avoid committing secrets to git. Defined here as documentation only.
+# github_runner_token: ""         # Runner registration token (generate before each run, expires in 1hr)
+# ghcr_pat: ""                    # GitHub PAT with read:packages scope (to pull runner image)
+github_org: "zamarle"             # GitHub organization the runner registers to
+runner_image: "ghcr.io/zamarle/github-runner:latest"  # The custom runner Docker image
+
+# --- System user ---
+ansible_user: "zac"               # Your Linux username — used to set up ~/.kube/config ownership

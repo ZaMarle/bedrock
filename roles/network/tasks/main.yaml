@@ -1,0 +1,62 @@
+# =============================================================================
+# NETWORK ROLE - Assigns a static IP address to the server
+# =============================================================================
+#
+# Problem: Your server was using DHCP (automatic IP assignment from the router).
+# The router changed the IP, which broke Kubernetes because all the certificates
+# and configs had the old IP baked in.
+#
+# Solution: This role switches from DHCP to a static (fixed) IP using netplan,
+# which is Ubuntu's network configuration tool.
+#
+# How it works:
+#   1. Writes a new netplan config file with the static IP
+#   2. Removes the old Ubuntu installer DHCP config
+#   3. Applies the changes (only if something actually changed)
+#
+# After this role runs, your server will always have the same IP address,
+# even after reboots.
+# =============================================================================
+
+---
+# Write a netplan config file that sets the static IP.
+# "copy" with "content" writes the text directly to the file on disk.
+# The {{ variable }} parts get replaced with values from group_vars/all.yaml.
+# "register: netplan_config" saves the result so we can check if it changed later.
+- name: Write static IP netplan config
+  copy:
+    dest: /etc/netplan/01-static.yaml
+    content: |
+      network:
+        version: 2
+        ethernets:
+          {{ interface }}:
+            dhcp4: false
+            addresses:
+              - {{ static_ip }}/{{ cidr }}
+            routes:
+              - to: default
+                via: {{ gateway }}
+            nameservers:
+              addresses: {{ dns_servers }}
+    owner: root
+    group: root
+    mode: "0600"
+  register: netplan_config
+
+# Ubuntu's installer (subiquity) created a DHCP config file during OS install.
+# We need to remove it so it doesn't conflict with our static IP config.
+# If the file doesn't exist, Ansible just skips this — no error.
+- name: Remove default subiquity DHCP config
+  file:
+    path: /etc/netplan/00-installer-config.yaml
+    state: absent
+  register: netplan_removed
+
+# Apply the network changes. "netplan apply" reads the YAML files in /etc/netplan/
+# and reconfigures the network adapter.
+# "when:" means this only runs if one of the above tasks actually made a change.
+# On re-runs where nothing changed, this is skipped (idempotent).
+- name: Apply netplan
+  command: netplan apply
+  when: netplan_config.changed or netplan_removed.changed

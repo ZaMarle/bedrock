@@ -1,0 +1,58 @@
+# =============================================================================
+# CONTAINERD ROLE - Installs and configures the container runtime
+# =============================================================================
+#
+# Kubernetes doesn't run containers directly — it needs a "container runtime"
+# to do the actual work of pulling images and running containers.
+# containerd is the most common runtime (it's what Docker uses under the hood).
+#
+# This role:
+#   1. Installs containerd from Ubuntu's package repository
+#   2. Deploys our config file (the key setting is SystemdCgroup = true,
+#      which makes containerd use the same cgroup manager as Kubernetes)
+#   3. Starts the containerd service and enables it on boot
+#
+# The "notify: restart containerd" on the config task means: if the config
+# file changes, trigger the handler (in handlers/main.yaml) to restart
+# containerd so it picks up the new config. Handlers only run at the END
+# of the role, and only if they were notified.
+# =============================================================================
+
+---
+# Install containerd. "state: present" = install if missing, skip if already there.
+- name: Install containerd
+  apt:
+    name: containerd
+    state: present
+    update_cache: true
+
+# Make sure the config directory exists before we try to write a file into it.
+- name: Ensure containerd config directory exists
+  file:
+    path: /etc/containerd
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Copy our config.toml from roles/containerd/files/config.toml to the server.
+# "src: config.toml" looks in the role's files/ directory automatically.
+# "notify: restart containerd" triggers the handler if the file changed.
+# If the file on disk already matches, nothing happens (idempotent).
+- name: Deploy containerd config
+  copy:
+    src: config.toml
+    dest: /etc/containerd/config.toml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart containerd
+
+# Make sure containerd is running and will start on boot.
+# "daemon_reload: true" tells systemd to re-read service files in case they changed.
+- name: Enable and start containerd
+  systemd:
+    name: containerd
+    state: started
+    enabled: true
+    daemon_reload: true
