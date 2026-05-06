@@ -52,9 +52,8 @@ Secrets are stored outside the project directory so they never end up in git or 
 You need two secrets:
 
 **`GHCR_PAT`** — a GitHub Personal Access Token for pulling the runner image from ghcr.io.
-You already have one stored in your GitHub Actions secrets at
-https://github.com/ZaMarle/vevous/settings/secrets/actions — use the same token value.
-If you need to create a new one: https://github.com/settings/tokens → `read:packages` scope.
+If you already have one, use the same value.
+To create a new one: https://github.com/settings/tokens → `read:packages` scope.
 
 **`GITHUB_RUNNER_TOKEN`** — a registration token that lets the runner register with your GitHub org.
 Generate at: https://github.com/organizations/zamarle/settings/actions/runners/new
