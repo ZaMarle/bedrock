@@ -14,15 +14,11 @@
 #
 # To run this playbook from WSL:
 #   cd /mnt/c/Users/qu4ck/source/bedrock
-#   ansible-playbook -i inventory/hosts.yaml -K playbooks/cluster.yaml \
-#     --extra-vars "github_runner_token=<token> ghcr_pat=<pat>"
+#   ./run.sh
 #
-# Flags:
-#   -i inventory/hosts.yaml    → which servers to target
-#   -K                         → ask for the sudo password on the remote server
-#   --extra-vars "..."         → pass secrets at runtime (not stored in files):
-#     - github_runner_token: from https://github.com/organizations/zamarle/settings/actions/runners/new
-#     - ghcr_pat: a GitHub PAT with read:packages scope
+# Secrets (passed as env vars, never stored in files):
+#   GITHUB_RUNNER_TOKEN: from https://github.com/organizations/zamarle/settings/actions/runners/new
+#   GHCR_PAT: a GitHub PAT with read:packages scope
 # =============================================================================
 
 ---
@@ -30,9 +26,9 @@
   hosts: all
   become: true
   roles:
-    - network          # Step 1: Set a static IP so the address never changes again
-    - prerequisites    # Step 2: Prepare the OS (swap off, kernel modules, sysctl)
-    - containerd       # Step 3: Install the container runtime (runs containers for k8s)
-    - kubernetes       # Step 4: Install kubeadm/kubelet/kubectl, init the cluster
-    - calico           # Step 5: Install the pod networking plugin (Calico)
-    - github-runner    # Step 6: Deploy a self-hosted GitHub Actions runner
+    - network # Step 1: Set a static IP so the address never changes again
+    - prerequisites # Step 2: Prepare the OS (swap off, kernel modules, sysctl)
+    - containerd # Step 3: Install the container runtime (runs containers for k8s)
+    - kubernetes # Step 4: Install kubeadm/kubelet/kubectl, init the cluster
+    - calico # Step 5: Install the pod networking plugin (Calico)
+    - github-runner # Step 6: Deploy a self-hosted GitHub Actions runner

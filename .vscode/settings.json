@@ -1,0 +1,14 @@
+{
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/ansible/schemas/main/f/ansible-playbook.json": [
+      "playbooks/*.yaml"
+    ],
+    "https://raw.githubusercontent.com/ansible/schemas/main/f/ansible-tasks.json": [
+      "roles/*/tasks/*.yaml",
+      "roles/*/handlers/*.yaml"
+    ],
+    "https://raw.githubusercontent.com/ansible/ansible-lint/main/src/ansiblelint/schemas/vars.json": [
+      "group_vars/*.yaml"
+    ]
+  }
+}

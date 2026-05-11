@@ -1,21 +1,9 @@
 # =============================================================================
-# NETWORK ROLE - Assigns a static IP address to the server
-# =============================================================================
+# NETWORK ROLE - Configures a static IP via netplan
 #
-# Problem: Your server was using DHCP (automatic IP assignment from the router).
-# The router changed the IP, which broke Kubernetes because all the certificates
-# and configs had the old IP baked in.
-#
-# Solution: This role switches from DHCP to a static (fixed) IP using netplan,
-# which is Ubuntu's network configuration tool.
-#
-# How it works:
-#   1. Writes a new netplan config file with the static IP
-#   2. Removes the old Ubuntu installer DHCP config
-#   3. Applies the changes (only if something actually changed)
-#
-# After this role runs, your server will always have the same IP address,
-# even after reboots.
+# 1. Writes /etc/netplan/01-static.yaml from group_vars (IP, gateway, DNS)
+# 2. Removes the default DHCP config left by the Ubuntu installer
+# 3. Runs `netplan apply` if either file changed
 # =============================================================================
 
 ---
