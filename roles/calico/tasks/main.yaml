@@ -76,11 +76,26 @@
     kubectl apply -f /tmp/calico-custom-resources.yaml
     --kubeconfig /etc/kubernetes/admin.conf
 
+# Wait for the Calico CNI config to be written to disk, then restart containerd
+# so kubelet picks it up. Without this, kubelet reports "cni plugin not initialized"
+# because containerd started before the CNI config existed.
+- name: Wait for Calico CNI config to appear
+  wait_for:
+    path: /etc/cni/net.d/10-calico.conflist
+    timeout: 120
+
+- name: Restart containerd to pick up CNI config
+  systemd:
+    name: containerd
+    state: restarted
+
+- name: Wait for node to be Ready
+  command: >
+    kubectl wait --for=condition=Ready node --all
+    --timeout=120s --kubeconfig /etc/kubernetes/admin.conf
+  changed_when: false
+
 # Wait for all Calico pods to be running and ready.
-# Calico creates several pods (node agent, typha, operator, API server).
-# "retries: 3" with "delay: 10" means: if the wait fails, try again after
-# 10 seconds, up to 3 times. The pods can take a minute to pull images and start.
-# "--timeout=300s" means each individual wait attempt allows up to 5 minutes.
 - name: Wait for Calico pods to be ready
   command: >
     kubectl wait --for=condition=Ready pods --all

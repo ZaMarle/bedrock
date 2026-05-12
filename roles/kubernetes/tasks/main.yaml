@@ -95,7 +95,7 @@
 # "failed_when: false" means: don't stop the playbook if this command fails
 # (we EXPECT it to fail when the cluster is broken — that's the whole point).
 - name: Check if cluster is healthy
-  command: kubectl get nodes --kubeconfig /etc/kubernetes/admin.conf
+  shell: kubectl get nodes --kubeconfig /etc/kubernetes/admin.conf 2>/dev/null | grep -w Ready
   register: cluster_health
   changed_when: false
   failed_when: false

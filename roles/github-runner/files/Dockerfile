@@ -49,5 +49,11 @@ RUN mv /usr/local/bin/helm /usr/local/bin/helm.real && \
     mv /usr/local/bin/helm-incluster.sh /usr/local/bin/helm && \
     chmod +x /usr/local/bin/helm
 
+# Entrypoint: configure the runner from env vars then start it
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Switch back to runner user (the default in base image)
 USER runner
+
+ENTRYPOINT ["/entrypoint.sh"]

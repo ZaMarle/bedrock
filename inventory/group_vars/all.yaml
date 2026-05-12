@@ -34,10 +34,13 @@ calico_version: "3.29"            # Calico version — the networking plugin tha
 # --- GitHub Actions Runner ---
 # These are NOT stored here — they're passed at runtime via --extra-vars
 # to avoid committing secrets to git. Defined here as documentation only.
-# github_runner_token: ""         # Runner registration token (generate before each run, expires in 1hr)
+# runner_tokens: {}               # Map of repo -> registration token (fetched by run.sh, expires in 1hr)
 # ghcr_pat: ""                    # GitHub PAT with read:packages scope (to pull runner image)
-github_org: "zamarle"             # GitHub organization the runner registers to
+github_user: "zamarle"           # GitHub user the runners register to
 runner_image: "ghcr.io/zamarle/github-runner:latest"  # The custom runner Docker image
+github_repos:                    # Repos to deploy a self-hosted runner for
+  - vevous
+  - escrow
 
 # --- System user ---
 ansible_user: "zac"               # Your Linux username — used to set up ~/.kube/config ownership

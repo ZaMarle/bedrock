@@ -9,18 +9,14 @@
 #      kubectl and helm against the cluster (cluster-admin access)
 #   3. An image pull secret so Kubernetes can pull the private runner image
 #      from ghcr.io
-#   4. A Deployment that runs the runner container, configured to register
-#      with your GitHub organization
+#   4. One Deployment per repo in github_repos, each registering a runner
+#      to that specific repo under your personal GitHub account
 #
-# REQUIRED EXTRA VARS (passed at runtime):
-#   --extra-vars "github_runner_token=<token> ghcr_pat=<pat>"
+# REQUIRED EXTRA VARS (passed at runtime via run.sh):
+#   runner_tokens: dict of repo -> registration token (fetched by run.sh)
+#   ghcr_pat:      GitHub PAT with "read:packages" scope (to pull runner image)
 #
-#   - github_runner_token: A GitHub runner registration token. Generate one at:
-#     https://github.com/organizations/zamarle/settings/actions/runners/new
-#     (these tokens expire after 1 hour, so generate right before running)
-#
-#   - ghcr_pat: A GitHub Personal Access Token with "read:packages" scope,
-#     used to pull the runner image from ghcr.io/zamarle/github-runner
+#   Tokens expire after 1 hour — run.sh fetches fresh ones each time.
 # =============================================================================
 
 ---
@@ -79,36 +75,32 @@
       --kubeconfig /etc/kubernetes/admin.conf \
       --dry-run=client -o yaml | kubectl apply -f - --kubeconfig /etc/kubernetes/admin.conf
 
-# ===== DEPLOYMENT =====
-# This creates the actual runner pod. Key things:
-#   - serviceAccountName: uses the ServiceAccount we created above, which
-#     auto-mounts a token into the pod for kubectl/helm to use
-#   - imagePullSecrets: tells k8s to use our ghcr.io credentials
-#   - GITHUB_URL: the org URL the runner registers to
-#   - GITHUB_TOKEN: the registration token (one-time use, expires in 1 hour)
-#   - RUNNER_NAME/RUNNER_GROUP: labels for identifying the runner in GitHub UI
-#   - RUNNER_WORKDIR: where workflow files are checked out inside the container
+# ===== DEPLOYMENTS (one per repo) =====
+# Each repo gets its own Deployment so it has a dedicated runner registered
+# to that specific repo. GITHUB_URL points to the repo (not the org) since
+# these are personal-account repos. runner_tokens is a dict keyed by repo name,
+# built and passed by run.sh.
 
-- name: Apply runner Deployment
+- name: Apply runner Deployment for {{ item }}
   command: kubectl apply -f - --kubeconfig /etc/kubernetes/admin.conf
   args:
     stdin: |
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: github-runner
+        name: github-runner-{{ item }}
         namespace: github-runner
         labels:
-          app: github-runner
+          app: github-runner-{{ item }}
       spec:
         replicas: 1
         selector:
           matchLabels:
-            app: github-runner
+            app: github-runner-{{ item }}
         template:
           metadata:
             labels:
-              app: github-runner
+              app: github-runner-{{ item }}
           spec:
             serviceAccountName: github-runner
             imagePullSecrets:
@@ -118,11 +110,11 @@
                 image: ghcr.io/zamarle/github-runner:latest
                 env:
                   - name: GITHUB_URL
-                    value: "https://github.com/zamarle"
-                  - name: GITHUB_TOKEN
-                    value: "{{ github_runner_token }}"
+                    value: "https://github.com/{{ github_user }}/{{ item }}"
+                  - name: RUNNER_TOKEN
+                    value: "{{ runner_tokens[item] }}"
                   - name: RUNNER_NAME
-                    value: "bedrock-runner"
+                    value: "bedrock-runner-{{ item }}"
                   - name: RUNNER_GROUP
                     value: "default"
                   - name: RUNNER_WORKDIR
@@ -134,15 +126,14 @@
                   limits:
                     cpu: "2"
                     memory: "2Gi"
+  loop: "{{ github_repos }}"
 
-# Wait for the runner pod to start successfully.
-- name: Wait for runner pod to be ready
+- name: Wait for runner pod to be ready for {{ item }}
   command: >
-    kubectl wait --for=condition=Ready pods -l app=github-runner
+    kubectl wait --for=condition=Ready pods -l app=github-runner-{{ item }}
     -n github-runner --timeout=120s
     --kubeconfig /etc/kubernetes/admin.conf
   changed_when: false
   retries: 3
   delay: 10
-  register: runner_wait
-  until: runner_wait.rc == 0
+  loop: "{{ github_repos }}"
